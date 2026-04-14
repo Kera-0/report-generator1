@@ -1,0 +1,14 @@
+version: '3.9'
+
+services:
+  report-generator:
+    build: .
+    image: report-generator:latest
+    volumes:
+      - ./data/input:/app/input:ro  
+      - ./data/output:/app/output     
+    command:
+      - /app/input/config.json
+      - /app/input/data.xlsx
+      - /app/output/report.html
+    restart: "no"

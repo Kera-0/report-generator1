@@ -1,0 +1,35 @@
+{
+  "report": {
+    "title": "Ежемесячный отчёт продаж — Апрель 2026",
+    "theme": "default",
+    "sources": [
+      { "id": "sales", "file": "/app/input/data.xlsx" }
+    ],
+    "tables": [
+      {
+        "id": "sales_table",
+        "source": "sales",
+        "sheet": "Sales",
+        "range": "A1:D8",
+        "headerRow": 1
+      }
+    ],
+    "context": {
+      "kpi": {
+        "revenue":   "sum(col('sales_table', 'Revenue'))",
+        "orders":    "count(col('sales_table', 'OrderId'))",
+        "avg_check": "kpi.revenue / kpi.orders"
+      }
+    },
+    "layout": [
+      { "type": "kpiRow", "items": ["kpi.revenue", "kpi.orders", "kpi.avg_check"] },
+      { "type": "heading", "text": "Детализация по менеджерам" },
+      {
+        "type": "table",
+        "table": "sales_table",
+        "title": "Продажи",
+        "columns": ["Region", "Manager", "OrderId", "Revenue"]
+      }
+    ]
+  }
+}
