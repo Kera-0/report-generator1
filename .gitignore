@@ -2,5 +2,3 @@ target/
 .idea/
 *.iml
 .vscode/
-data/input/*.xlsx
-data/output/*.html
