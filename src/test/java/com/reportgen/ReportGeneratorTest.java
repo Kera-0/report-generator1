@@ -43,11 +43,24 @@ class ReportGeneratorTest {
                       "kpi": {
                         "revenue": "sum(col('sales_table', 'Revenue'))",
                         "orders": "count(col('sales_table', 'OrderId'))",
-                        "avg_check": "kpi.revenue / kpi.orders"
+                        "avg_check": "kpi.revenue / kpi.orders",
+                        "revenue_plus_orders": "kpi.revenue + kpi.orders",
+                        "projected_revenue": "kpi.revenue * kpi.orders",
+                        "projected_minus_avg": "kpi.projected_revenue - kpi.avg_check"
                       }
                     },
                     "layout": [
-                      { "type": "kpiRow", "items": ["kpi.revenue", "kpi.orders", "kpi.avg_check"] },
+                      {
+                        "type": "kpiRow",
+                        "items": [
+                          "kpi.revenue",
+                          "kpi.orders",
+                          "kpi.avg_check",
+                          "kpi.revenue_plus_orders",
+                          "kpi.projected_revenue",
+                          "kpi.projected_minus_avg"
+                        ]
+                      },
                       { "type": "table", "table": "sales_table", "columns": ["Region", "Manager", "Revenue"] }
                     ]
                   }
@@ -62,6 +75,9 @@ class ReportGeneratorTest {
                 .contains("<title>Sales Report</title>")
                 .contains("Revenue")
                 .contains("300")
+                .contains("302")
+                .contains("600")
+                .contains("450")
                 .contains("Alice");
     }
 

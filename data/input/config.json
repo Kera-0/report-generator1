@@ -18,11 +18,12 @@
       "kpi": {
         "revenue":   "sum(col('sales_table', 'Revenue'))",
         "orders":    "count(col('sales_table', 'OrderId'))",
-        "avg_check": "kpi.revenue / kpi.orders"
+        "avg_check": "kpi.revenue / kpi.orders",
+        "some": "(kpi.revenue + kpi.orders) * 2"
       }
     },
     "layout": [
-      { "type": "kpiRow", "items": ["kpi.revenue", "kpi.orders", "kpi.avg_check"] },
+      { "type": "kpiRow", "items": ["kpi.revenue", "kpi.orders", "kpi.avg_check", "kpi.some"] },
       { "type": "heading", "text": "Детализация по менеджерам" },
       {
         "type": "table",
