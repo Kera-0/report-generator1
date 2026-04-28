@@ -1,6 +1,6 @@
 {
   "report": {
-    "title": "Ежемесячный отчёт продаж — Апрель 2026",
+    "title": "Ежемесячный отчёт продаж - Апрель 2026",
     "theme": "default",
     "sources": [
       { "id": "sales", "file": "/app/input/data.xlsx" }

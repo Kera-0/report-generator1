@@ -12,7 +12,6 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -203,7 +202,6 @@ public class ReportGenerator {
                     putNested(resolved, entry.getKey(), evaluate(String.valueOf(entry.getValue()), tables, resolved));
                     iterator.remove();
                 } catch (RuntimeException ignored) {
-                    // A later pass may resolve references like kpi.revenue / kpi.orders.
                 }
             }
         }
@@ -214,10 +212,10 @@ public class ReportGenerator {
     }
 
     private Object evaluate(String formula, Map<String, DataTable> tables, Map<String, Object> context) {
-        return new FormulaParser(formula, tables, context).parse();
+        return new FormulaParser(formula, tables, context, this).parse();
     }
 
-    private Object aggregate(String formula, Map<String, DataTable> tables) {
+    Object aggregate(String formula, Map<String, DataTable> tables) {
         Matcher aggregate = AGGREGATE.matcher(formula.trim());
         if (aggregate.matches()) {
             List<Object> values = table(tables, aggregate.group(2)).column(aggregate.group(3));
@@ -242,7 +240,7 @@ public class ReportGenerator {
         return values.stream().filter(v -> v != null && !String.valueOf(v).isBlank()).count();
     }
 
-    private double number(Object value) {
+    double number(Object value) {
         if (value instanceof Number number) {
             return number.doubleValue();
         }
@@ -250,7 +248,7 @@ public class ReportGenerator {
     }
 
     @SuppressWarnings("unchecked")
-    private Object value(String path, Map<String, Object> context) {
+    Object value(String path, Map<String, Object> context) {
         Object current = context;
         for (String part : path.split("\\.")) {
             if (!(current instanceof Map<?, ?> map) || !map.containsKey(part)) {
@@ -358,236 +356,5 @@ public class ReportGenerator {
 
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
-    }
-
-    public static class ConfigFile {
-        public ReportConfig report;
-    }
-
-    public static class ReportConfig {
-        public String title;
-        public List<SourceConfig> sources = new ArrayList<>();
-        public List<TableConfig> tables = new ArrayList<>();
-        public Map<String, Object> context = new LinkedHashMap<>();
-        public List<LayoutItem> layout = new ArrayList<>();
-    }
-
-    public static class SourceConfig {
-        public String id;
-        public String file;
-    }
-
-    public static class TableConfig {
-        public String id;
-        public String source;
-        public String sheet;
-        public String range;
-        public int headerRow = 1;
-    }
-
-    public static class LayoutItem {
-        public String type;
-        public List<String> items = new ArrayList<>();
-        public String table;
-        public List<String> columns = new ArrayList<>();
-        public String title;
-        public String text;
-    }
-
-    private static class DataTable {
-        final String id;
-        final List<String> headers;
-        final List<Map<String, Object>> rows;
-
-        DataTable(String id, List<String> headers, List<Map<String, Object>> rows) {
-            this.id = id;
-            this.headers = List.copyOf(headers);
-            this.rows = rows.stream().map(row -> Collections.unmodifiableMap(new LinkedHashMap<>(row))).toList();
-        }
-
-        List<Object> column(String name) {
-            if (!headers.contains(name)) {
-                throw new IllegalArgumentException("Unknown column '" + name + "' in table '" + id + "'");
-            }
-            return rows.stream().map(row -> row.get(name)).toList();
-        }
-    }
-
-    private class FormulaParser {
-        private final String formula;
-        private final Map<String, DataTable> tables;
-        private final Map<String, Object> context;
-        private int position;
-
-        FormulaParser(String formula, Map<String, DataTable> tables, Map<String, Object> context) {
-            this.formula = formula;
-            this.tables = tables;
-            this.context = context;
-        }
-
-        Object parse() {
-            Object result = expression();
-            skipWhitespace();
-            if (position != formula.length()) {
-                throw new IllegalArgumentException("Unexpected token in formula: " + formula.substring(position));
-            }
-            return result;
-        }
-
-        private Object expression() {
-            Object result = term();
-            while (true) {
-                skipWhitespace();
-                if (match('+')) {
-                    result = number(result) + number(term());
-                } else if (match('-')) {
-                    result = number(result) - number(term());
-                } else {
-                    return result;
-                }
-            }
-        }
-
-        private Object term() {
-            Object result = factor();
-            while (true) {
-                skipWhitespace();
-                if (match('*')) {
-                    result = number(result) * number(factor());
-                } else if (match('/')) {
-                    result = number(result) / number(factor());
-                } else {
-                    return result;
-                }
-            }
-        }
-
-        private Object factor() {
-            skipWhitespace();
-            if (match('+')) {
-                return number(factor());
-            }
-            if (match('-')) {
-                return -number(factor());
-            }
-            if (match('(')) {
-                Object result = expression();
-                skipWhitespace();
-                if (!match(')')) {
-                    throw new IllegalArgumentException("Missing closing parenthesis in formula: " + formula);
-                }
-                return result;
-            }
-            if (startsAggregate()) {
-                return parseAggregate();
-            }
-            if (startsNumber()) {
-                return parseNumber();
-            }
-            return parseValuePath();
-        }
-
-        private Object parseAggregate() {
-            int start = position;
-            while (position < formula.length() && Character.isLetter(formula.charAt(position))) {
-                position++;
-            }
-            skipWhitespace();
-            if (!match('(')) {
-                throw new IllegalArgumentException("Expected aggregate function in formula: " + formula);
-            }
-            int close = closingParenthesis(position - 1);
-            position = close + 1;
-            return aggregate(formula.substring(start, position), tables);
-        }
-
-        private Object parseNumber() {
-            int start = position;
-            while (position < formula.length()) {
-                char current = formula.charAt(position);
-                if (!Character.isDigit(current) && current != '.' && current != ',') {
-                    break;
-                }
-                position++;
-            }
-            return number(formula.substring(start, position));
-        }
-
-        private Object parseValuePath() {
-            int start = position;
-            while (position < formula.length()) {
-                char current = formula.charAt(position);
-                if (Character.isWhitespace(current) || current == '+' || current == '-' || current == '*'
-                        || current == '/' || current == ')' || current == '(') {
-                    break;
-                }
-                position++;
-            }
-            if (start == position) {
-                throw new IllegalArgumentException("Expected value in formula: " + formula);
-            }
-            return value(formula.substring(start, position), context);
-        }
-
-        private boolean startsAggregate() {
-            return startsFunction("sum") || startsFunction("count");
-        }
-
-        private boolean startsFunction(String name) {
-            if (!formula.startsWith(name, position)) {
-                return false;
-            }
-            int current = position + name.length();
-            while (current < formula.length() && Character.isWhitespace(formula.charAt(current))) {
-                current++;
-            }
-            return current < formula.length() && formula.charAt(current) == '(';
-        }
-
-        private boolean startsNumber() {
-            if (position >= formula.length()) {
-                return false;
-            }
-            char current = formula.charAt(position);
-            return Character.isDigit(current)
-                    || current == '.' && position + 1 < formula.length() && Character.isDigit(formula.charAt(position + 1));
-        }
-
-        private int closingParenthesis(int openParenthesis) {
-            int depth = 0;
-            boolean inQuote = false;
-            for (int i = openParenthesis; i < formula.length(); i++) {
-                char current = formula.charAt(i);
-                if (current == '\'') {
-                    inQuote = !inQuote;
-                }
-                if (inQuote) {
-                    continue;
-                }
-                if (current == '(') {
-                    depth++;
-                } else if (current == ')') {
-                    depth--;
-                    if (depth == 0) {
-                        return i;
-                    }
-                }
-            }
-            throw new IllegalArgumentException("Missing closing parenthesis in formula: " + formula);
-        }
-
-        private boolean match(char expected) {
-            if (position < formula.length() && formula.charAt(position) == expected) {
-                position++;
-                return true;
-            }
-            return false;
-        }
-
-        private void skipWhitespace() {
-            while (position < formula.length() && Character.isWhitespace(formula.charAt(position))) {
-                position++;
-            }
-        }
     }
 }
