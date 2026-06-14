@@ -1,35 +1,190 @@
 {
   "report": {
-    "title": "Ежемесячный отчёт продаж - Апрель 2026",
+    "title": "Monthly sales report - April 2026",
     "theme": "default",
+    "template": "report-template.html",
     "sources": [
-      { "id": "sales", "file": "/app/input/data.xlsx" }
+      {
+        "id": "sales_source",
+        "file": "sales.xlsx"
+      },
+      {
+        "id": "targets_source",
+        "file": "targets.xlsx"
+      },
+      {
+        "id": "returns_source",
+        "file": "returns.xlsx"
+      },
+      {
+        "id": "marketing_source",
+        "file": "marketing.xlsx"
+      }
     ],
     "tables": [
       {
         "id": "sales_table",
-        "source": "sales",
+        "source": "sales_source",
         "sheet": "Sales",
-        "range": "A1:D8",
+        "range": "A1:E200",
+        "headerRow": 1
+      },
+      {
+        "id": "sales_by_channel_table",
+        "source": "sales_source",
+        "sheet": "Channels",
+        "range": "A1:D50",
+        "headerRow": 1
+      },
+      {
+        "id": "targets_table",
+        "source": "targets_source",
+        "sheet": "Targets",
+        "range": "A1:C50",
+        "headerRow": 1
+      },
+      {
+        "id": "regional_targets_table",
+        "source": "targets_source",
+        "sheet": "RegionalTargets",
+        "range": "A1:D50",
+        "headerRow": 1
+      },
+      {
+        "id": "returns_table",
+        "source": "returns_source",
+        "sheet": "Returns",
+        "range": "A1:C100",
+        "headerRow": 1
+      },
+      {
+        "id": "marketing_table",
+        "source": "marketing_source",
+        "sheet": "Campaigns",
+        "range": "A1:E100",
         "headerRow": 1
       }
     ],
+    "functions": {
+      "safe_divide": {
+        "args": ["part", "total"],
+        "formula": "if(total == 0, 0, part / total)"
+      },
+      "percent": {
+        "args": ["part", "total"],
+        "formula": "round(safe_divide(part, total) * 100, 2)"
+      },
+      "variance": {
+        "args": ["actual", "plan"],
+        "formula": "actual - plan"
+      },
+      "performance_status": {
+        "args": ["actual", "plan"],
+        "formula": "if(percent(actual, plan) >= 100, 'on plan', if(percent(actual, plan) >= 90, 'watch', 'behind'))"
+      },
+      "refund_rate_status": {
+        "args": ["rate"],
+        "formula": "if(rate <= 2, 'healthy', if(rate <= 5, 'attention', 'critical'))"
+      },
+      "roas_status": {
+        "args": ["roas"],
+        "formula": "if(roas >= 5, 'efficient', if(roas >= 3, 'ok', 'review'))"
+      }
+    },
     "context": {
+      "period": {
+        "label": "'April 2026'"
+      },
       "kpi": {
-        "revenue":   "sum(col('sales_table', 'Revenue'))",
-        "orders":    "count(col('sales_table', 'OrderId'))",
-        "avg_check": "kpi.revenue / kpi.orders",
-        "some": "(kpi.revenue + kpi.orders) * 2"
+        "revenue": "sum(col('sales_table', 'Revenue'))",
+        "orders": "count(col('sales_table', 'OrderId'))",
+        "avg_check": "round(safe_divide(kpi.revenue, kpi.orders), 2)",
+        "channel_revenue": "sum(col('sales_by_channel_table', 'Revenue'))",
+        "target_revenue": "sum(col('targets_table', 'TargetRevenue'))",
+        "target_orders": "sum(col('targets_table', 'TargetOrders'))",
+        "regional_target_revenue": "sum(col('regional_targets_table', 'TargetRevenue'))",
+        "revenue_plan_percent": "percent(kpi.revenue, kpi.target_revenue)",
+        "orders_plan_percent": "percent(kpi.orders, kpi.target_orders)",
+        "revenue_variance": "variance(kpi.revenue, kpi.target_revenue)",
+        "status": "performance_status(kpi.revenue, kpi.target_revenue)",
+        "refunds": "sum(col('returns_table', 'RefundAmount'))",
+        "refund_rate": "percent(kpi.refunds, kpi.revenue)",
+        "refund_status": "refund_rate_status(kpi.refund_rate)",
+        "marketing_spend": "sum(col('marketing_table', 'Spend'))",
+        "marketing_leads": "sum(col('marketing_table', 'Leads'))",
+        "cost_per_lead": "round(safe_divide(kpi.marketing_spend, kpi.marketing_leads), 2)",
+        "roas": "round(safe_divide(kpi.revenue, kpi.marketing_spend), 2)",
+        "roas_status": "roas_status(kpi.roas)",
+        "net_revenue": "kpi.revenue - kpi.refunds"
       }
     },
     "layout": [
-      { "type": "kpiRow", "items": ["kpi.revenue", "kpi.orders", "kpi.avg_check", "kpi.some"] },
-      { "type": "heading", "text": "Детализация по менеджерам" },
+      {
+        "type": "kpiRow",
+        "items": [
+          "kpi.revenue",
+          "kpi.net_revenue",
+          "kpi.orders",
+          "kpi.avg_check",
+          "kpi.revenue_plan_percent",
+          "kpi.refund_rate",
+          "kpi.roas",
+          "kpi.status",
+          "kpi.refund_status",
+          "kpi.roas_status"
+        ]
+      },
+      {
+        "type": "heading",
+        "text": "Sales details"
+      },
       {
         "type": "table",
         "table": "sales_table",
-        "title": "Продажи",
-        "columns": ["Region", "Manager", "OrderId", "Revenue"]
+        "title": "Orders",
+        "columns": ["Region", "Manager", "OrderId", "Revenue", "OrderDate"]
+      },
+      {
+        "type": "table",
+        "table": "sales_by_channel_table",
+        "title": "Sales by channel",
+        "columns": ["Channel", "Orders", "Revenue", "Share"]
+      },
+      {
+        "type": "heading",
+        "text": "Targets"
+      },
+      {
+        "type": "table",
+        "table": "targets_table",
+        "title": "Plan summary",
+        "columns": ["Region", "TargetRevenue", "TargetOrders"]
+      },
+      {
+        "type": "table",
+        "table": "regional_targets_table",
+        "title": "Regional targets",
+        "columns": ["Region", "Manager", "TargetRevenue", "TargetOrders"]
+      },
+      {
+        "type": "heading",
+        "text": "Returns"
+      },
+      {
+        "type": "table",
+        "table": "returns_table",
+        "title": "Refunds",
+        "columns": ["OrderId", "Reason", "RefundAmount"]
+      },
+      {
+        "type": "heading",
+        "text": "Marketing"
+      },
+      {
+        "type": "table",
+        "table": "marketing_table",
+        "title": "Campaigns",
+        "columns": ["Campaign", "Channel", "Spend", "Leads", "RevenueInfluenced"]
       }
     ]
   }

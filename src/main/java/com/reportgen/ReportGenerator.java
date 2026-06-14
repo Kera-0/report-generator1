@@ -10,13 +10,15 @@ import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Iterator;
+import java.util.Deque;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.apache.poi.ss.usermodel.Cell;
@@ -31,8 +33,7 @@ import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.apache.poi.ss.util.CellRangeAddress;
 
 public class ReportGenerator {
-    private static final Pattern AGGREGATE = Pattern.compile(
-            "(sum|count)\\s*\\(\\s*col\\s*\\(\\s*'([^']+)'\\s*,\\s*'([^']+)'\\s*\\)\\s*\\)");
+    private static final Pattern PLACEHOLDER = Pattern.compile("\\{\\{\\s*([A-Za-z0-9_.]+)\\s*}}");
     private static final DateTimeFormatter DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     private final ObjectMapper mapper = new ObjectMapper()
@@ -41,10 +42,10 @@ public class ReportGenerator {
     public void generate(String configPath, String inputXlsxPath, String outputHtmlPath) throws Exception {
         Path configFile = Path.of(configPath);
         ReportConfig config = loadConfig(configFile);
-        Map<String, DataTable> tables = loadTables(config, configFile.toAbsolutePath().getParent(),
-                Path.of(inputXlsxPath));
-        Map<String, Object> context = resolveContext(config.context, tables);
-        String html = renderHtml(config, tables, context);
+        Path configDir = configFile.toAbsolutePath().getParent();
+        Map<String, DataTable> tables = loadTables(config, configDir, Path.of(inputXlsxPath));
+        Map<String, Object> context = resolveContext(config.context, tables, config.functions);
+        String html = renderHtml(config, tables, context, configDir);
 
         Path output = Path.of(outputHtmlPath);
         Path parent = output.toAbsolutePath().getParent();
@@ -59,10 +60,39 @@ public class ReportGenerator {
         if (file.report == null || isBlank(file.report.title)) {
             throw new IllegalArgumentException("Config must contain report.title");
         }
+        if (file.report.functions == null) {
+            file.report.functions = new LinkedHashMap<>();
+        }
         if (file.report.sources.isEmpty() || file.report.tables.isEmpty()) {
             throw new IllegalArgumentException("Config must contain at least one source and one table");
         }
+        validateFunctions(file.report.functions);
         return file.report;
+    }
+
+    private void validateFunctions(Map<String, FunctionConfig> functions) {
+        for (Map.Entry<String, FunctionConfig> entry : functions.entrySet()) {
+            String name = entry.getKey();
+            FunctionConfig function = entry.getValue();
+            if (isBlank(name) || !isIdentifier(name)) {
+                throw new IllegalArgumentException("Invalid function name: " + name);
+            }
+            if (function == null || isBlank(function.formula)) {
+                throw new IllegalArgumentException("Function must contain formula: " + name);
+            }
+            if (function.args == null) {
+                function.args = new ArrayList<>();
+            }
+            Set<String> args = new LinkedHashSet<>();
+            for (String arg : function.args) {
+                if (isBlank(arg) || !isIdentifier(arg)) {
+                    throw new IllegalArgumentException("Invalid argument in function " + name + ": " + arg);
+                }
+                if (!args.add(arg)) {
+                    throw new IllegalArgumentException("Duplicate argument in function " + name + ": " + arg);
+                }
+            }
+        }
     }
 
     private Map<String, DataTable> loadTables(ReportConfig config, Path configDir, Path cliInputPath) throws Exception {
@@ -189,39 +219,81 @@ public class ReportGenerator {
         };
     }
 
-    private Map<String, Object> resolveContext(Map<String, Object> rawContext, Map<String, DataTable> tables) {
-        Map<String, Object> unresolved = new LinkedHashMap<>();
-        flatten("", rawContext, unresolved);
-        Map<String, Object> resolved = new LinkedHashMap<>();
+    private Map<String, Object> resolveContext(Map<String, Object> rawContext, Map<String, DataTable> tables,
+            Map<String, FunctionConfig> functions) {
+        Map<String, Object> flatContext = new LinkedHashMap<>();
+        flatten("", rawContext, flatContext);
 
-        for (int pass = 0; pass < unresolved.size() + 3 && !unresolved.isEmpty(); pass++) {
-            Iterator<Map.Entry<String, Object>> iterator = unresolved.entrySet().iterator();
-            while (iterator.hasNext()) {
-                Map.Entry<String, Object> entry = iterator.next();
-                try {
-                    putNested(resolved, entry.getKey(), evaluate(String.valueOf(entry.getValue()), tables, resolved));
-                    iterator.remove();
-                } catch (RuntimeException ignored) {
-                }
-            }
+        Map<String, FormulaNode> nodes = new LinkedHashMap<>();
+        Set<String> contextPaths = flatContext.keySet();
+        for (Map.Entry<String, Object> entry : flatContext.entrySet()) {
+            Set<String> dependencies = entry.getValue() instanceof String formula
+                    ? FormulaParser.referencedContextPaths(formula, contextPaths, functions)
+                    : Set.of();
+            nodes.put(entry.getKey(), new FormulaNode(entry.getKey(), entry.getValue(), dependencies));
         }
-        if (!unresolved.isEmpty()) {
-            throw new IllegalArgumentException("Cannot resolve context formulas: " + unresolved.keySet());
+
+        Map<String, Object> resolved = new LinkedHashMap<>();
+        for (String path : sortContextNodes(nodes)) {
+            FormulaNode node = nodes.get(path);
+            Object value = node.rawValue() instanceof String formula
+                    ? evaluate(formula, tables, resolved, functions)
+                    : node.rawValue();
+            putNested(resolved, node.path(), value);
         }
         return resolved;
     }
 
-    private Object evaluate(String formula, Map<String, DataTable> tables, Map<String, Object> context) {
-        return new FormulaParser(formula, tables, context, this).parse();
+    private Object evaluate(String formula, Map<String, DataTable> tables, Map<String, Object> context,
+            Map<String, FunctionConfig> functions) {
+        return new FormulaParser(formula, tables, context, functions).parse();
     }
 
-    Object aggregate(String formula, Map<String, DataTable> tables) {
-        Matcher aggregate = AGGREGATE.matcher(formula.trim());
-        if (aggregate.matches()) {
-            List<Object> values = table(tables, aggregate.group(2)).column(aggregate.group(3));
-            return "count".equals(aggregate.group(1)) ? count(values) : sum(values);
+    private List<String> sortContextNodes(Map<String, FormulaNode> nodes) {
+        List<String> ordered = new ArrayList<>();
+        Map<String, VisitState> states = new LinkedHashMap<>();
+        Deque<String> stack = new ArrayDeque<>();
+        for (String path : nodes.keySet()) {
+            visitContextNode(path, nodes, states, stack, ordered);
         }
-        throw new IllegalArgumentException("Unsupported aggregate formula: " + formula);
+        return ordered;
+    }
+
+    private void visitContextNode(String path, Map<String, FormulaNode> nodes, Map<String, VisitState> states,
+            Deque<String> stack, List<String> ordered) {
+        VisitState state = states.get(path);
+        if (state == VisitState.DONE) {
+            return;
+        }
+        if (state == VisitState.VISITING) {
+            throw new IllegalArgumentException("Cycle in context formulas: " + formatCycle(stack, path));
+        }
+
+        states.put(path, VisitState.VISITING);
+        stack.addLast(path);
+        for (String dependency : nodes.get(path).dependencies()) {
+            if (nodes.containsKey(dependency)) {
+                visitContextNode(dependency, nodes, states, stack, ordered);
+            }
+        }
+        stack.removeLast();
+        states.put(path, VisitState.DONE);
+        ordered.add(path);
+    }
+
+    private String formatCycle(Deque<String> stack, String repeatedPath) {
+        List<String> cycle = new ArrayList<>();
+        boolean inCycle = false;
+        for (String path : stack) {
+            if (path.equals(repeatedPath)) {
+                inCycle = true;
+            }
+            if (inCycle) {
+                cycle.add(path);
+            }
+        }
+        cycle.add(repeatedPath);
+        return String.join(" -> ", cycle);
     }
 
     private DataTable table(Map<String, DataTable> tables, String id) {
@@ -230,21 +302,6 @@ public class ReportGenerator {
             throw new IllegalArgumentException("Unknown table: " + id);
         }
         return table;
-    }
-
-    private double sum(Collection<?> values) {
-        return values.stream().filter(v -> v != null).mapToDouble(this::number).sum();
-    }
-
-    private long count(Collection<?> values) {
-        return values.stream().filter(v -> v != null && !String.valueOf(v).isBlank()).count();
-    }
-
-    double number(Object value) {
-        if (value instanceof Number number) {
-            return number.doubleValue();
-        }
-        return Double.parseDouble(String.valueOf(value).replace(" ", "").replace(',', '.'));
     }
 
     @SuppressWarnings("unchecked")
@@ -259,18 +316,16 @@ public class ReportGenerator {
         return current;
     }
 
-    private String renderHtml(ReportConfig config, Map<String, DataTable> tables, Map<String, Object> context) {
+    private String renderHtml(ReportConfig config, Map<String, DataTable> tables, Map<String, Object> context,
+            Path configDir) throws IOException {
+        String generatedAt = LocalDateTime.now().format(DATE_TIME);
+        String content = renderContent(config, tables, context);
+        String template = loadTemplate(config, configDir);
+        return applyTemplate(template, config, context, generatedAt, content);
+    }
+
+    private String renderContent(ReportConfig config, Map<String, DataTable> tables, Map<String, Object> context) {
         StringBuilder html = new StringBuilder();
-        html.append("<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\">")
-                .append("<title>").append(escape(config.title)).append("</title>")
-                .append("<style>body{font-family:Arial,sans-serif;margin:32px;background:#f6f7f9;color:#1e2530}")
-                .append("main{max-width:1100px;margin:auto}.kpis{display:flex;gap:12px;flex-wrap:wrap}")
-                .append(".kpi,table{background:white;border:1px solid #d9dee7;border-radius:8px}")
-                .append(".kpi{padding:16px;min-width:170px}.label{color:#677386;font-size:12px;text-transform:uppercase}")
-                .append(".value{font-size:28px;font-weight:700;color:#256f7a}table{width:100%;border-collapse:collapse;overflow:hidden}")
-                .append("th,td{padding:10px 12px;border-bottom:1px solid #d9dee7;text-align:left}th{background:#e3f2f0}</style>")
-                .append("</head><body><main><h1>").append(escape(config.title)).append("</h1>")
-                .append("<p>Generated at ").append(LocalDateTime.now().format(DATE_TIME)).append("</p>");
 
         for (LayoutItem item : config.layout) {
             if ("kpiRow".equals(item.type)) {
@@ -303,7 +358,73 @@ public class ReportGenerator {
                 html.append("</tbody></table>");
             }
         }
-        return html.append("</main></body></html>").toString();
+        return html.toString();
+    }
+
+    private String loadTemplate(ReportConfig config, Path configDir) throws IOException {
+        if (isBlank(config.template)) {
+            return defaultTemplate();
+        }
+        Path templatePath = Path.of(config.template);
+        if (!templatePath.isAbsolute() && configDir != null) {
+            templatePath = configDir.resolve(templatePath).normalize();
+        }
+        if (!Files.exists(templatePath)) {
+            throw new IllegalArgumentException("HTML template does not exist: " + templatePath);
+        }
+        return Files.readString(templatePath, StandardCharsets.UTF_8);
+    }
+
+    private String defaultTemplate() {
+        return "<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\">"
+                + "<title>{{title}}</title><style>{{style}}</style></head><body><main>"
+                + "<h1>{{title}}</h1><p>Generated at {{generatedAt}}</p>{{content}}"
+                + "</main></body></html>";
+    }
+
+    private String defaultStyles() {
+        return "body{font-family:Arial,sans-serif;margin:32px;background:#f6f7f9;color:#1e2530}"
+                + "main{max-width:1100px;margin:auto}.kpis{display:flex;gap:12px;flex-wrap:wrap}"
+                + ".kpi,table{background:white;border:1px solid #d9dee7;border-radius:8px}"
+                + ".kpi{padding:16px;min-width:170px}.label{color:#677386;font-size:12px;text-transform:uppercase}"
+                + ".value{font-size:28px;font-weight:700;color:#256f7a}"
+                + "table{width:100%;border-collapse:collapse;overflow:hidden}"
+                + "th,td{padding:10px 12px;border-bottom:1px solid #d9dee7;text-align:left}th{background:#e3f2f0}";
+    }
+
+    private String applyTemplate(String template, ReportConfig config, Map<String, Object> context, String generatedAt,
+            String content) {
+        Map<String, String> values = new LinkedHashMap<>();
+        values.put("title", escape(config.title));
+        values.put("report.title", escape(config.title));
+        values.put("generatedAt", escape(generatedAt));
+        values.put("report.generatedAt", escape(generatedAt));
+        values.put("content", content);
+        values.put("report.content", content);
+        values.put("style", defaultStyles());
+        values.put("styles", defaultStyles());
+        values.put("report.style", defaultStyles());
+        values.put("report.styles", defaultStyles());
+
+        Map<String, Object> flatContext = new LinkedHashMap<>();
+        flatten("", context, flatContext);
+        for (Map.Entry<String, Object> entry : flatContext.entrySet()) {
+            values.put(entry.getKey(), escape(format(entry.getValue())));
+            values.put("context." + entry.getKey(), escape(format(entry.getValue())));
+        }
+
+        Matcher matcher = PLACEHOLDER.matcher(template);
+        StringBuffer result = new StringBuffer();
+        while (matcher.find()) {
+            String replacement = values.get(matcher.group(1));
+            if (replacement == null) {
+                matcher.appendReplacement(result, Matcher.quoteReplacement(matcher.group(0)));
+            } else {
+                matcher.appendReplacement(result, Matcher.quoteReplacement(replacement));
+            }
+        }
+        matcher.appendTail(result);
+        return result.toString();
     }
 
     private void flatten(String prefix, Object value, Map<String, Object> target) {
@@ -354,7 +475,35 @@ public class ReportGenerator {
         return isBlank(value) ? null : value.trim();
     }
 
+    private boolean isIdentifier(String value) {
+        if (isBlank(value) || !isIdentifierStart(value.charAt(0))) {
+            return false;
+        }
+        for (int i = 1; i < value.length(); i++) {
+            if (!isIdentifierPart(value.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isIdentifierStart(char value) {
+        return Character.isLetter(value) || value == '_';
+    }
+
+    private boolean isIdentifierPart(char value) {
+        return Character.isLetterOrDigit(value) || value == '_';
+    }
+
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private record FormulaNode(String path, Object rawValue, Set<String> dependencies) {
+    }
+
+    private enum VisitState {
+        VISITING,
+        DONE
     }
 }

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{title}}</title>
+  <style>
+    {{style}}
+    body {
+      margin: 0;
+      background: #eef1f4;
+      color: #20242c;
+    }
+    main {
+      max-width: 1180px;
+      padding: 28px;
+    }
+    .report-header {
+      margin-bottom: 22px;
+      border-bottom: 3px solid #2f6f73;
+      padding-bottom: 16px;
+    }
+    .report-header h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+    }
+    .report-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      color: #52606f;
+      font-size: 14px;
+    }
+    .summary-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin: 18px 0 24px;
+    }
+    .summary-strip div {
+      background: #ffffff;
+      border: 1px solid #d5dce4;
+      border-left: 4px solid #2f6f73;
+      padding: 12px 14px;
+    }
+    .summary-strip span {
+      display: block;
+      color: #657285;
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+    .summary-strip strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 20px;
+    }
+    section.kpis {
+      margin-bottom: 24px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="report-header">
+      <h1>{{title}}</h1>
+      <div class="report-meta">
+        <span>Period: {{context.period.label}}</span>
+        <span>Generated: {{generatedAt}}</span>
+        <span>Status: {{context.kpi.status}}</span>
+      </div>
+    </header>
+
+    <section class="summary-strip">
+      <div>
+        <span>Revenue vs plan</span>
+        <strong>{{context.kpi.revenue_plan_percent}}%</strong>
+      </div>
+      <div>
+        <span>Revenue variance</span>
+        <strong>{{context.kpi.revenue_variance}}</strong>
+      </div>
+      <div>
+        <span>Refund status</span>
+        <strong>{{context.kpi.refund_status}}</strong>
+      </div>
+    </section>
+
+    {{content}}
+  </main>
+</body>
+</html>
